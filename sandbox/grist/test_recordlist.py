@@ -1,3 +1,4 @@
+import unittest
 import testutil
 import test_engine
 from objtypes import RecordSetStub
@@ -100,3 +101,7 @@ class TestRecordList(test_engine.EngineTestCase):
       [1,    "Mammals",  [1, 3],      ["Mammals", "Mammals"],   [mammals, mammals]],
       [2,    "Reptilia", [2, 4],      ["Reptilia", "Reptilia"], [reptiles, reptiles]],
     ])
+
+
+if __name__ == "__main__":
+  unittest.main()

@@ -1,4 +1,5 @@
 # pylint: disable=line-too-long
+import unittest
 import logger
 import test_engine
 
@@ -189,3 +190,7 @@ class TestImportActions(test_engine.EngineTestCase):
       [6, 3, [12]],
       [7, 1, [13, 14, 15]],  # new section for transform preview
     ])
+
+
+if __name__ == "__main__":
+  unittest.main()

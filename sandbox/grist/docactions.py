@@ -209,8 +209,7 @@ class DocActions(object):
 
     # Fill in the new column with the values from the old column.
     new_column = table.get_column(col_id)
-    for row_id in table.row_ids:
-      new_column.set(row_id, old_column.raw_get(row_id))
+    new_column.copy_from_column(old_column)
 
     # Generate the undo action.
     self._engine.out_actions.undo.append(actions.ModifyColumn(table_id, col_id, undo_col_info))

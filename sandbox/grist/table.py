@@ -184,6 +184,8 @@ class Table(object):
     # Each table maintains a reference to the engine that owns it.
     self._engine = engine
 
+    engine.data.create_table(self)
+
     # The UserTable object for this table, set in _rebuild_model
     self.user_table = None
 
@@ -241,6 +243,10 @@ class Table(object):
     # but it makes _num_rows slightly faster, and only creating the lookup map when _num_rows
     # is called seems to be too late, at least for unit tests.
     self._empty_lookup_column = self._get_lookup_map(())
+
+
+  def destroy(self):
+    self._engine.data.drop_table(self)
 
   def _num_rows(self):
     """

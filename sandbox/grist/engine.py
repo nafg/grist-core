@@ -15,7 +15,7 @@ import six
 from six.moves import zip
 from six.moves.collections_abc import Hashable  # pylint:disable-all
 from sortedcontainers import SortedSet
-
+from data import ColumnData
 import acl
 import actions
 import action_obj
@@ -105,6 +105,57 @@ skipped_completions = re.compile(r'\.(_|lookupOrAddDerived|getSummarySourceGroup
 # column may refer to derived tables or independent tables. Derived tables would have an extra
 # property, marking them as derived, which would affect certain UI decisions.
 
+class Database(object):
+  __slots__ = ('engine', 'tables')
+
+  def __init__(self, engine):
+    self.engine = engine
+    self.tables = {}
+
+
+  def create_table(self, table):
+    if table.table_id in self.tables:
+      raise ValueError("Table %s already exists" % table.table_id)
+    print("Creating table %s" % table.table_id)
+    self.tables[table.table_id] = dict()
+
+
+  def drop_table(self, table):
+    if table.table_id not in self.tables:
+      raise ValueError("Table %s already exists" % table.table_id)
+    print("Deleting table %s" % table.table_id)
+    del self.tables[table.table_id]
+
+
+  def create_column(self, col):
+    if col.table_id not in self.tables:
+      self.tables[col.table_id] = dict()
+
+    if col.col_id in self.tables[col.table_id]:
+      old_one = self.tables[col.table_id][col.col_id]
+      col._data = old_one._data
+      col._data.col = col
+      old_one.detached = True
+      old_one._data = None
+    else:
+      col._data = ColumnData(col)
+      # print('Column {}.{} is detaching column {}.{}'.format(self.table_id, self.col_id, old_one.table_id, old_one.col_id))
+    # print('Creating column: ', self.table_id, self.col_id)
+    self.tables[col.table_id][col.col_id] = col
+    col.detached = False
+
+  def drop_column(self, col):
+    tables = self.tables
+
+    if col.table_id not in tables:
+      raise Exception('Table not found for column: ', col.table_id, col.col_id)
+    
+    if col.col_id not in tables[col.table_id]:
+      raise Exception('Column not found: ', col.table_id, col.col_id)
+
+    print('Destroying column: ', col.table_id, col.col_id)
+    col._data.drop()
+    del tables[col.table_id][col.col_id]
 
 class Engine(object):
   """
@@ -140,6 +191,8 @@ class Engine(object):
   """
 
   def __init__(self):
+    self.data = Database(self)      # The document data, including logic (formulas), and metadata.
+
     # The document data, including logic (formulas), and metadata (tables prefixed with "_grist_").
     self.tables = {}                # Maps table IDs (or names) to Table objects.
 
@@ -204,6 +257,7 @@ class Engine(object):
 
     # The list of columns that got deleted while applying an action.
     self._gone_columns = []
+    self._gone_tables = []
 
     # The set of potentially unused LookupMapColumns.
     self._unused_lookups = set()
@@ -1177,6 +1231,7 @@ class Engine(object):
     if user_table is None:
       for c in table.get_helper_columns():
         self.delete_column(c)
+      self._gone_tables.append(table)
 
   def _maybe_update_trigger_dependencies(self):
     if not self._have_trigger_columns_changed:
@@ -1302,6 +1357,7 @@ class Engine(object):
       # consistent internally as well as with the clients and database outside of the sandbox
       # (which won't see any changes in case of an error).
       log.info("Failed to apply useractions; reverting: %r" % (e,))
+      print("Failed to apply useractions; reverting: %r" % (e,))
       self._undo_to_checkpoint(checkpoint)
 
       # Check schema consistency again. If this fails, something is really wrong (we tried to go
@@ -1361,6 +1417,7 @@ class Engine(object):
     """
     #log.warn("Engine.apply_doc_action %s" % (doc_action,))
     self._gone_columns = []
+    self._gone_tables = []
 
     action_name = doc_action.__class__.__name__
     saved_schema = None
@@ -1399,6 +1456,9 @@ class Engine(object):
       # Calc actions may already be generated if the column deletion was triggered by auto-removal.
       actions.prune_actions(self.out_actions.calc, col.table_id, col.col_id)
       col.destroy()
+
+    for table in self._gone_tables:
+      table.destroy()
 
     # We normally recompute formulas before returning to the user; but some formulas are also used
     # internally in-between applying doc actions. We have this workaround to ensure that those are

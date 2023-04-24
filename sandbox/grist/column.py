@@ -61,16 +61,23 @@ class BaseColumn(object):
   def __init__(self, table, col_id, col_info):
     self.type_obj = col_info.type_obj
     self._is_right_type = self.type_obj.is_right_type
-    self._data = []
     self.col_id = col_id
     self.table_id = table.table_id
+    self.engine = table._engine
     self.node = depend.Node(self.table_id, col_id)
     self._is_formula = col_info.is_formula
     self._is_private = bool(col_info.method) and getattr(col_info.method, 'is_private', False)
     self.update_method(col_info.method)
+    self.detached = False
 
-    # Always initialize to include the special empty record at index 0.
-    self.growto(1)
+    self._data = None
+    self._table = table
+    self.engine.data.create_column(self)
+
+
+  def iterate(self):
+    for row_id, value in self._data.iterate():
+      yield row_id, value
 
   def update_method(self, method):
     """
@@ -101,38 +108,46 @@ class BaseColumn(object):
     return self.method is not None
 
   def clear(self):
-    self._data = []
-    self.growto(1)    # Always include the special empty record at index 0.
+    if self.detached:
+      raise Exception('Column already detached: ', self.table_id, self.col_id)
+    self._data.clear()
 
   def destroy(self):
     """
     Called when the column is deleted.
     """
-    del self._data[:]
+    if self.detached:
+      print('Warning - destroying already detached column: ', self.table_id, self.col_id)
+      return
+
+    self.engine.data.drop_column(self)
 
   def growto(self, size):
-    if len(self._data) < size:
-      self._data.extend([self.getdefault()] * (size - len(self._data)))
+    if self.detached:
+      raise Exception('Column already detached: ', self.table_id, self.col_id)
+
+    self._data.growto(size)
 
   def size(self):
-    return len(self._data)
+    return self._data.size()
 
   def set(self, row_id, value):
     """
     Sets the value of this column for the given row_id. Value should be as returned by convert(),
     i.e. of the right type, or alttext, or error (but should NOT be random wrong types).
     """
-    try:
-      self._data[row_id] = value
-    except IndexError:
-      self.growto(row_id + 1)
-      self._data[row_id] = value
+    if self.detached:
+      raise Exception('Column already detached: ', self.table_id, self.col_id)
+    self._data.set(row_id, value)
 
   def unset(self, row_id):
     """
     Sets the value for the given row_id to the default value.
     """
+    if self.detached:
+      raise Exception('Column already detached: ', self.table_id, self.col_id)
     self.set(row_id, self.getdefault())
+    self._data.unset(row_id)
 
   def get_cell_value(self, row_id, restore=False):
     """
@@ -182,10 +197,7 @@ class BaseColumn(object):
     Returns the value stored for the given row_id. This may be an error or alttext, and it does
     not convert to a richer object.
     """
-    try:
-      return self._data[row_id]
-    except IndexError:
-      return self.getdefault()
+    return self._data.raw_get(row_id)
 
   def safe_get(self, row_id):
     """
@@ -212,7 +224,15 @@ class BaseColumn(object):
     """
     Replace this column's data entirely with data from another column of the same exact type.
     """
-    self._data[:] = other_column._data
+    if self.detached:
+      raise Exception('Column already detached: ', self.table_id, self.col_id)
+    if other_column.detached:
+      print('Warning: copying from detached column: ', other_column.table_id, other_column.col_id)
+      return
+    
+    print('Column {}.{} is copying from {}.{}'.format(self.table_id, self.col_id, other_column.table_id, other_column.col_id))
+
+    self._data.copy_from(other_column._data)
 
   def convert(self, value_to_convert):
     """
@@ -244,7 +264,7 @@ class ChoiceColumn(DataColumn):
   def rename_choices(self, renames):
     row_ids = []
     values = []
-    for row_id, value in enumerate(self._data):
+    for row_id, value in self.iterate():
       if value is not None and self.type_obj.is_right_type(value):
         value = self._rename_cell_choice(renames, value)
         if value is not None:
@@ -443,7 +463,7 @@ class BaseReferenceColumn(BaseColumn):
     # This is hacky: we should have an interface to iterate through values of a column. (As it is,
     # self._data may include values for non-existent rows; it works here because those values are
     # falsy, which makes them ignored by self._update_references).
-    for row_id, value in enumerate(self._data):
+    for row_id, value in self.iterate():
       if self.type_obj.is_right_type(value):
         self._update_references(row_id, None, value)
 

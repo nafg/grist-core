@@ -14,7 +14,7 @@
 
 # Build helper files.
 /.build*
-
+*.grist
 *.swp
 *.pyc
 *.bak
