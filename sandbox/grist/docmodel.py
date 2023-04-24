@@ -20,7 +20,7 @@ from schema import RecalcWhen
 # pylint:disable=redefined-outer-name
 
 def _record_set(table_id, group_by, sort_by=None):
-  @usertypes.formulaType(usertypes.ReferenceList(table_id))
+  @usertypes.formulaType(usertypes.ChildReferenceList(table_id))
   def func(rec, table):
     lookup_table = table.docmodel.get_table(table_id)
     return lookup_table.lookupRecords(sort_by=sort_by, **{group_by: rec.id})

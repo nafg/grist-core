@@ -31,11 +31,13 @@ def apply(actions):
 try:
   apply(['AddRawTable', 'Table1'])
   apply(['AddRecord', 'Table1', None, {'A': 1, 'B': 2, 'C': 3}])
-  # apply(['RenameColumn', 'Table1', 'A', 'NewA'])
+  apply(['AddColumn', 'Table1', 'D', {'type': 'Numeric', 'isFormula': True, 'formula': '$A + 3'}]),
+  apply(['RenameColumn', 'Table1', 'A', 'NewA'])
   apply(['RenameTable', 'Table1', 'Dwa'])
+  apply(['RemoveColumn', 'Dwa', 'B'])
+  apply(['RemoveTable', 'Dwa'])
 
   #  ['RemoveColumn', "Table1", 'A'],
-    # ['AddColumn', 'Table1', 'D', {'type': 'Numeric', 'isFormula': True, 'formula': '$A + 3'}],
     # ['AddColumn', 'Table1', 'D', {'type': 'Numeric', 'isFormula': True, 'formula': '$A + 3'}],
     # ['ModifyColumn', 'Table1', 'B', {'type': 'Numeric', 'isFormula': True, 'formula': '$A + 1'}],
   #])

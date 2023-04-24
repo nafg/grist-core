@@ -62,6 +62,8 @@ class AltText(object):
   with unexpected result.
   """
   def __init__(self, text, typename=None):
+    if text == "None":
+      raise  InvalidTypedValue(typename, text)
     self._text = text
     self._typename = typename
 

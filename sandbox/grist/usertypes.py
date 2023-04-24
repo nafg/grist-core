@@ -93,12 +93,20 @@ class BaseColumnType(object):
     self._creation_order = BaseColumnType._global_creation_order
     BaseColumnType._global_creation_order += 1
 
+
   @classmethod
   def typename(cls):
     """
     Returns the name of the type, e.g. "Int", "Ref", or "RefList".
     """
     return cls.__name__
+  
+  @classmethod
+  def sql_type(cls):
+    """
+    Returns the SQL type for this column, e.g. "INTEGER", "TEXT", or "BLOB".
+    """
+    raise NotImplementedError
 
   @classmethod
   def is_right_type(cls, _value):
@@ -143,6 +151,8 @@ class BaseColumnType(object):
 
 
 class Text(BaseColumnType):
+
+
   """
   Text is the type for a field holding string (text) data.
   """
@@ -173,6 +183,9 @@ class Text(BaseColumnType):
   def is_right_type(cls, value):
     return isinstance(value, (six.string_types, NoneType))
 
+  @classmethod
+  def sql_type(cls):
+    return "TEXT"
 
 class Blob(BaseColumnType):
   """
@@ -186,6 +199,9 @@ class Blob(BaseColumnType):
   def is_right_type(cls, value):
     return isinstance(value, (six.binary_type, NoneType))
 
+  @classmethod
+  def sql_type(cls):
+    return "BLOB"
 
 class Any(BaseColumnType):
   """
@@ -195,7 +211,10 @@ class Any(BaseColumnType):
   def do_convert(cls, value):
     # Convert AltText values to plain text when assigning to type Any.
     return six.text_type(value) if isinstance(value, AltText) else value
-
+  
+  @classmethod
+  def sql_type(cls):
+    return "BLOB"
 
 class Bool(BaseColumnType):
   """
@@ -223,6 +242,11 @@ class Bool(BaseColumnType):
     return isinstance(value, (bool, NoneType))
 
 
+  @classmethod
+  def sql_type(cls):
+    return "INTEGER"
+
+
 class Int(BaseColumnType):
   """
   Int is the type for a field holding integer data.
@@ -241,6 +265,10 @@ class Int(BaseColumnType):
   def is_right_type(cls, value):
     return value is None or (type(value) in integer_types and is_int_short(value))
 
+  @classmethod
+  def sql_type(cls):
+    return "INTEGER"
+
 
 class Numeric(BaseColumnType):
   """
@@ -257,6 +285,9 @@ class Numeric(BaseColumnType):
     # will have type 'int'.
     return type(value) in _numeric_or_none
 
+  @classmethod
+  def sql_type(cls):
+    return "REAL"
 
 class Date(Numeric):
   """
@@ -309,6 +340,11 @@ class DateTime(Date):
       return moment.parse_iso(value, self.timezone)
     else:
       raise objtypes.ConversionError('DateTime')
+    
+  
+  @classmethod
+  def sql_type(cls):
+    return "DATE"
 
 class Choice(Text):
   """
@@ -354,6 +390,10 @@ class ChoiceList(BaseColumnType):
         pass
     return value
 
+  
+  @classmethod
+  def sql_type(cls):
+    return "TEXT"
 
 class PositionNumber(BaseColumnType):
   """
@@ -369,7 +409,10 @@ class PositionNumber(BaseColumnType):
   def is_right_type(cls, value):
     # Same as Numeric, but does not support None.
     return type(value) in _numeric_types
-
+  
+  @classmethod
+  def sql_type(cls):
+    return "INTEGER"
 
 class ManualSortPos(PositionNumber):
   pass
@@ -397,6 +440,10 @@ class Id(BaseColumnType):
   @classmethod
   def is_right_type(cls, value):
     return (type(value) in integer_types and is_int_short(value))
+  
+  @classmethod
+  def sql_type(cls):
+    return "INTEGER"
 
 
 class Reference(Id):
@@ -414,6 +461,10 @@ class Reference(Id):
   @classmethod
   def typename(cls):
     return "Ref"
+  
+  @classmethod
+  def sql_type(cls):
+    return "INTEGER"
 
 
 class ReferenceList(BaseColumnType):
@@ -429,13 +480,11 @@ class ReferenceList(BaseColumnType):
     return "RefList"
 
   def do_convert(self, value):
-    if isinstance(value, six.string_types):
-      # If it's a string that looks like JSON, try to parse it as such.
-      if value.startswith('['):
-        try:
-          value = json.loads(value)
-        except Exception:
-          pass
+    if is_json_array(value):
+      try:
+        value = json.loads(value)
+      except Exception:
+        pass
 
     if isinstance(value, RecordSet):
       assert value._table.table_id == self.table_id
@@ -445,10 +494,23 @@ class ReferenceList(BaseColumnType):
       return None
     return [Reference.do_convert(val) for val in value]
 
+
   @classmethod
   def is_right_type(cls, value):
-    return value is None or (isinstance(value, list) and
+    return value is None or is_json_array(value) or (isinstance(value, six.string_types + (list,)) and
                              all(Reference.is_right_type(val) for val in value))
+  
+  @classmethod
+  def sql_type(cls):
+    return "TEXT"
+
+
+class ChildReferenceList(ReferenceList):
+  """
+  Chil genuis reference list type.
+  """
+  def __init__(self, table_id):
+    super(ChildReferenceList, self).__init__(table_id)
 
 
 class Attachments(ReferenceList):
@@ -457,3 +519,7 @@ class Attachments(ReferenceList):
   """
   def __init__(self):
     super(Attachments, self).__init__('_grist_Attachments')
+
+
+def is_json_array(val):
+  return isinstance(val, six.string_types) and val.startswith('[')

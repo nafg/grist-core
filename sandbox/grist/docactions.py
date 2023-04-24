@@ -45,12 +45,21 @@ class DocActions(object):
     # make sure we don't have stale values hanging around.
     undo_values = {}
     for column in six.itervalues(table.all_columns):
+      if column.col_id == "id":
+        continue
       if not column.is_private() and column.col_id != "id":
         col_values = [column.raw_get(r) for r in row_ids]
         default = column.getdefault()
         # If this column had all default values, don't include it into the undo BulkAddRecord.
         if not all(strict_equal(val, default) for val in col_values):
           undo_values[column.col_id] = col_values
+      for row_id in row_ids:
+        column.unset(row_id)
+    
+    # Remove id column as last one, as this also removes the row
+    for column in six.itervalues(table.all_columns):
+      if column.col_id != "id":
+        continue
       for row_id in row_ids:
         column.unset(row_id)
 

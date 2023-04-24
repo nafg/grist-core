@@ -1790,6 +1790,7 @@ class UserActions(object):
     extra = {'summarySourceTable': summarySourceTableRef} if summarySourceTableRef else {}
     table_rec = self._docmodel.add(self._docmodel.tables, tableId=table_id, primaryViewId=0,
                                    **extra)[0]
+    
     self._docmodel.insert(
       table_rec.columns, None,
       colId         = col_ids,

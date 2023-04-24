@@ -140,6 +140,7 @@ class BaseColumn(object):
       raise Exception('Column already detached: ', self.table_id, self.col_id)
     self._data.set(row_id, value)
 
+
   def unset(self, row_id):
     """
     Sets the value for the given row_id to the default value.
@@ -148,6 +149,7 @@ class BaseColumn(object):
       raise Exception('Column already detached: ', self.table_id, self.col_id)
     self.set(row_id, self.getdefault())
     self._data.unset(row_id)
+
 
   def get_cell_value(self, row_id, restore=False):
     """
@@ -173,7 +175,7 @@ class BaseColumn(object):
     # Inline _convert_raw_value here because this is particularly hot code, called on every access
     # of any data field in a formula.
     if self._is_right_type(raw):
-      return self._make_rich_value(raw)
+      return self._make_rich_value(raw, row_id)
     return self._alt_text(raw)
 
   def _convert_raw_value(self, raw):
@@ -184,7 +186,7 @@ class BaseColumn(object):
   def _alt_text(self, raw):
     return usertypes.AltText(str(raw), self.type_obj.typename())
 
-  def _make_rich_value(self, typed_value):
+  def _make_rich_value(self, typed_value, row_id=None):
     """
     Called by get_cell_value() with a value of the right type for this column. Should be
     implemented by derived classes to produce a "rich" version of the value.
@@ -301,7 +303,7 @@ class DateColumn(NumericColumn):
   DateColumn contains numerical timestamps represented as seconds since epoch, in type float,
   to midnight of specific UTC dates. Accessing them yields date objects.
   """
-  def _make_rich_value(self, typed_value):
+  def _make_rich_value(self, typed_value, row_id=None):
     return typed_value and moment.ts_to_date(typed_value)
 
   def sample_value(self):
@@ -316,7 +318,7 @@ class DateTimeColumn(NumericColumn):
     super(DateTimeColumn, self).__init__(table, col_id, col_info)
     self._timezone = col_info.type_obj.timezone
 
-  def _make_rich_value(self, typed_value):
+  def _make_rich_value(self, typed_value, row_id=None):
     return typed_value and moment.ts_to_dt(typed_value, self._timezone)
 
   def sample_value(self):
@@ -420,7 +422,7 @@ class ChoiceListColumn(ChoiceColumn):
       value = tuple(value)
     super(ChoiceListColumn, self).set(row_id, value)
 
-  def _make_rich_value(self, typed_value):
+  def _make_rich_value(self, typed_value, row_id=None):
     return () if typed_value is None else typed_value
 
   def _rename_cell_choice(self, renames, value):
@@ -501,7 +503,7 @@ class ReferenceColumn(BaseReferenceColumn):
   ReferenceColumn contains IDs of rows in another table. Accessing them yields the records in the
   other table.
   """
-  def _make_rich_value(self, typed_value):
+  def _make_rich_value(self, typed_value, row_id=None):
     # If we refer to an invalid table, return integers rather than fail completely.
     if not self._target_table:
       return typed_value
@@ -545,11 +547,21 @@ class ReferenceListColumn(BaseReferenceColumn):
     for new_value in new_list or ():
       self._relation.add_reference(row_id, new_value)
 
-  def _make_rich_value(self, typed_value):
+  def _make_rich_value(self, typed_value, row_id):
     if typed_value is None:
       typed_value = []
+    elif isinstance(typed_value, six.string_types) and typed_value.startswith(u'['):
+      try:
+        typed_value = json.loads(typed_value)
+      except Exception:
+        pass
     # If we refer to an invalid table, return integers rather than fail completely.
     if not self._target_table:
+      return typed_value
+    if isinstance(self.type_obj, usertypes.ChildReferenceList) and row_id:
+      typed_value = self._target_table.RecordSet(typed_value, self._relation)
+      typed_value._sort_by = 'parentPos'
+      typed_value._group_by = {"parentId": row_id}
       return typed_value
     return self._target_table.RecordSet(typed_value, self._relation)
 
