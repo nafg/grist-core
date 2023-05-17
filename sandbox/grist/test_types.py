@@ -717,3 +717,7 @@ class TestTypes(test_engine.EngineTestCase):
       ['id', 'division'],
       [ 1,   0.5],
     ])
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

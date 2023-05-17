@@ -452,3 +452,7 @@ class TestColumnActions(test_engine.EngineTestCase):
       [3,     '[-16]'      ],
       [4,     '[]'         ],
     ])
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

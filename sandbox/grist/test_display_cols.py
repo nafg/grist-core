@@ -620,3 +620,7 @@ class TestUserActions(test_engine.EngineTestCase):
       [2,    26,       0],
       [3,    27,       0]
     ])
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

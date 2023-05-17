@@ -42,3 +42,9 @@ class TestDependencies(test_engine.EngineTestCase):
       [3,    3,       16],
       [3200, 3200,    5121610],
     ])
+
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()
+  

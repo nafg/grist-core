@@ -645,3 +645,8 @@ class TestCompletion(test_engine.EngineTestCase):
 class BadRepr(object):
   def __repr__(self):
     raise Exception("Bad repr")
+
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

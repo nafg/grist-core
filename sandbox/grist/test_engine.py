@@ -586,6 +586,5 @@ def get_comparable_repr(a):
 # particular test cases can apply to these cases too.
 create_tests_from_script(*testutil.parse_testscript())
 
-
 if __name__ == "__main__":
   unittest.main()

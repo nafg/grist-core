@@ -184,6 +184,7 @@ class Table(object):
     # Each table maintains a reference to the engine that owns it.
     self._engine = engine
 
+    self.detached = False
     engine.data.create_table(self)
 
     # The UserTable object for this table, set in _rebuild_model
@@ -244,8 +245,14 @@ class Table(object):
     # is called seems to be too late, at least for unit tests.
     self._empty_lookup_column = self._get_lookup_map(())
 
+  def clear(self):
+    self.get_column('id').clear()
+    for column in six.itervalues(self.all_columns):
+      column.clear()
 
   def destroy(self):
+    if self.detached:
+      return
     self._engine.data.drop_table(self)
 
   def _num_rows(self):
@@ -491,8 +498,38 @@ class Table(object):
     dependencies, so that the formula will get re-evaluated if needed. It also creates and starts
     maintaining a lookup index to make such lookups fast.
     """
-    # The tuple of keys used determines the LookupMap we need.
+
     sort_by = kwargs.pop('sort_by', None)
+
+    def parse(k):
+      if isinstance(kwargs[k], lookup._Contains):
+        return f'''
+          EXISTS (
+            SELECT 1
+            FROM json_each({k}) AS j
+            WHERE j.value = ?
+          )
+        '''
+      else:
+        return f"`{k}` = ?"
+      
+    values = [kwargs[k] for k in kwargs]
+    values = tuple([v.value if isinstance(v, lookup._Contains) else v for v in values])
+
+    try:
+
+      sql = f"SELECT id FROM `{self.table_id}` WHERE "
+      sql += " AND ".join([parse(k) for k in kwargs])
+
+      if not kwargs:
+        sql = f"SELECT id FROM `{self.table_id}`"
+
+      rowIds = [x[0] for x in self._engine.data.sql.execute(sql, values).fetchall()]
+      row_ids = sorted(rowIds)
+      return self.RecordSet(row_ids, None, group_by=kwargs, sort_by=sort_by)
+    except Exception as e:
+      raise e
+    # The tuple of keys used determines the LookupMap we need.
     key = []
     col_ids = []
     for col_id in sorted(kwargs):
@@ -707,7 +744,7 @@ class Table(object):
     @property
     def recordset_field(recset):
       return self._get_col_obj_subset(col_obj, recset._row_ids, recset._source_relation)
-
+    
     setattr(self.Record, col_obj.col_id, record_field)
     setattr(self.RecordSet, col_obj.col_id, recordset_field)
 

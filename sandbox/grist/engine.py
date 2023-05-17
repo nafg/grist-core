@@ -15,7 +15,7 @@ import six
 from six.moves import zip
 from six.moves.collections_abc import Hashable  # pylint:disable-all
 from sortedcontainers import SortedSet
-from data import MemoryColumn, MemoryDatabase, SqlDatabase
+from data import RecomputeMap, make_data
 import acl
 import actions
 import action_obj
@@ -28,7 +28,7 @@ import gencode
 import logger
 import match_counter
 import objtypes
-from objtypes import strict_equal
+from objtypes import RaisedException, strict_equal
 from relation import SingleRowsIdentityRelation
 import sandbox
 import schema
@@ -156,11 +156,8 @@ class Engine(object):
     # The module containing the compiled user code generated from the schema.
     self.gencode = gencode.GenCode()
 
-    # Maintain the dependency graph of what Nodes (columns) depend on what other Nodes.
-    self.dep_graph = depend.Graph()
-
     # Maps Nodes to sets of dirty rows (that need to be recomputed).
-    self.recompute_map = {}
+    self.recompute_map = RecomputeMap(self)
 
     # Maps Nodes to sets of done rows (to avoid recomputing in an infinite loop).
     self._recompute_done_map = {}
@@ -315,7 +312,12 @@ class Engine(object):
     Returns the list of all the other table names that data engine expects to be loaded.
     """
 
-    self.data = SqlDatabase(self)
+    if self.data:
+      self.tables = {}
+      self.data.close()
+      self.data = None
+
+    self.data = make_data(self)
 
     self.schema = schema.build_schema(meta_tables, meta_columns)
 
@@ -337,8 +339,7 @@ class Engine(object):
     table = self.tables[data.table_id]
 
     # Clear all columns, whether or not they are present in the data.
-    for column in six.itervalues(table.all_columns):
-      column.clear()
+    table.clear()
 
     # Only load columns that aren't stored.
     columns = {col_id: data for (col_id, data) in six.iteritems(data.columns)
@@ -515,10 +516,7 @@ class Engine(object):
       # Add an edge to indicate that the node being computed depends on the node passed in.
       # Note that during evaluation, we only *add* dependencies. We *remove* them by clearing them
       # whenever ALL rows for a node are invalidated (on schema changes and reloads).
-      edge = (self._current_node, node, relation)
-      if edge not in self._recompute_edge_set:
-        self.dep_graph.add_edge(*edge)
-        self._recompute_edge_set.add(edge)
+      self.add_to_deps(self._current_node, self._current_row_id, node, row_ids, relation)
 
     # This check is not essential here, but is an optimization that saves cycles.
     if self.recompute_map.get(node) is None:
@@ -553,6 +551,8 @@ class Engine(object):
     self._pre_update()  # empty lists/sets/maps
 
   def _update_loop(self, work_items, ignore_other_changes=False):
+    print("warning this shouldn't be called")
+    return
     """
     Called to compute the specified cells, including any nested dependencies.
     Consumes OrderError exceptions, and reacts to them with a strategy for
@@ -629,50 +629,69 @@ class Engine(object):
     nodes = sorted(nodes, reverse=True, key=lambda n: (not n.col_id.startswith('#lookup'), n))
     return [WorkItem(node, None, []) for node in nodes]
 
-  def _bring_all_up_to_date(self):
+
+  def remove_from_recalc(self, tableId, colId, rowId):
+    self.data.sql.execute("delete from recalc where tableId = ? and colId = ? and rowId = ?", (tableId, colId, rowId))
+
+
+  def _bring_all_up_to_date(self, all=True):
     # Bring all nodes up to date. We iterate in sorted order of the keys so that the order is
     # deterministic (which is helpful for tests in particular).
     self._pre_update()
     try:
-      # Figure out remaining work to do, maintaining classic Grist ordering.
-      work_items = self._make_sorted_work_items(self.recompute_map.keys())
-      self._update_loop(work_items)
-      # Check if any potentially unused LookupMaps are still unused, and if so, delete them.
-      for lookup_map in self._unused_lookups:
-        if self.dep_graph.remove_node_if_unused(lookup_map.node):
-          self.delete_column(lookup_map)
+
+      while True:
+        query = "select * from recalc order by tableId, colId, seq"
+        if not all:
+          query = "select * from recalc where tableId like '_grist_%' order by tableId, colId, seq"
+
+        recalc = self.data.sql.execute(query).fetchall()
+
+        if not recalc:
+          break
+
+        for row in recalc:
+          tableId = row['tableId']
+          colId = row['colId']
+          rowId = row['rowId']
+          table = self.tables[tableId]
+          col = table.get_column(colId)
+
+          self._current_node = node = depend.Node(tableId, colId)
+          self._is_current_node_formula = col.is_formula()
+
+          if rowId == 'all':
+            for id in table.row_ids:
+              self.add_to_recalc(tableId, colId, id)
+            self.remove_from_recalc(tableId, colId, 'all')
+            continue
+
+          self._current_row_id = rowId
+
+          if col.method:
+            try:
+              value = self._recompute_one_cell(table, col, rowId)
+
+              value = col.convert(value)
+              previous = col.raw_get(rowId)
+              if not strict_equal(value, previous):
+                changes = self._changes_map.setdefault(node, [])
+                changes.append((rowId, previous, value))
+                col.set(rowId, value)
+                self.invalidate_deps(node.table_id, node.col_id, rowId)
+            except OrderError:
+              self.data.sql.execute("update recalc set seq = seq + 1 where tableId = ? and colId = ? and rowId = ?", (tableId, colId, rowId))
+              continue
+          else:
+            pass # We are called for a data column that probably got changed by a user action
+          self.remove_from_recalc(tableId, colId, rowId)
+
+
     finally:
       self._unused_lookups.clear()
       self._post_update()
+      self._is_current_node_formula = False
 
-  def _bring_mlookups_up_to_date(self, triggering_doc_action):
-    # Just bring the *metadata* lookup nodes up to date.
-    #
-    # In general, lookup nodes don't know exactly what depends on them until they are
-    # recomputed. So invalidating lookup nodes doesn't complete all invalidation; further
-    # invalidations may be generated in the course of recomputing the lookup nodes.
-    #
-    # We use some private formulas on metadata tables internally (e.g. for a list columns of a
-    # table). This method is part of a somewhat hacky solution in apply_doc_action: to force
-    # recomputation of lookup nodes to ensure that we see up-to-date results between applying doc
-    # actions.
-    #
-    # For regular data, correct values aren't needed until we recompute formulas. So we process
-    # lookups before other formulas, but do not need to update lookups after each doc_action.
-    #
-    # In addition, we expose the triggering doc_action so that lookupOrAddDerived can avoid adding
-    # a record to a derived table when the trigger itself is a change to the derived table. This
-    # currently only happens on undo, and is admittedly an ugly workaround.
-    self._pre_update()
-    try:
-      self._triggering_doc_action = triggering_doc_action
-      nodes = [node for node in self.recompute_map
-               if node.col_id.startswith('#lookup') and node.table_id.startswith('_grist_')]
-      work_items = self._make_sorted_work_items(nodes)
-      self._update_loop(work_items, ignore_other_changes=True)
-    finally:
-      self._triggering_doc_action = None
-      self._post_update()
 
   def is_triggered_by_table_action(self, table_id):
     # Workaround for lookupOrAddDerived that prevents AddRecord from being created when the
@@ -680,17 +699,6 @@ class Engine(object):
     a = self._triggering_doc_action
     return a and getattr(a, 'table_id', None) == table_id
 
-  def bring_col_up_to_date(self, col_obj):
-    """
-    Public interface to recompute a column if it is dirty. It also generates a calc or stored
-    action and adds it into self.out_actions object.
-    """
-    self._pre_update()
-    try:
-      self._recompute_done_map.pop(col_obj.node, None)
-      self._recompute(col_obj.node)
-    finally:
-      self._post_update()
 
   def get_formula_error(self, table_id, col_id, row_id):
     """
@@ -738,155 +746,6 @@ class Engine(object):
       # nested dependencies would not get computed.
       self._update_loop([WorkItem(node, row_ids, [])], ignore_other_changes=True)
 
-
-  def _recompute_step(self, node, allow_evaluation=True, require_rows=None): # pylint: disable=too-many-statements
-    """
-    Recomputes a node (i.e. column), evaluating the appropriate formula for the given rows
-    to get new values. Only columns whose .has_formula() is true should ever have invalidated rows
-    in recompute_map (this includes data columns with a default formula, for newly-added records).
-
-    If `allow_evaluation` is false, any time we would recompute a node, we instead throw
-    an OrderError exception.  This is used to "flatten" computation - instead of evaluating
-    nested dependencies on the program stack, an external loop will evaluate them in an
-    unnested order.  Remember that formulas may access other columns, and column access calls
-    engine._use_node, which calls _recompute to bring those nodes up to date.
-
-    Recompute records changes in _changes_map, which is used later to generate appropriate
-    BulkUpdateRecord actions, either calc (for formulas) or stored (for non-formula columns).
-    """
-
-    dirty_rows = self.recompute_map.get(node, None)
-    if dirty_rows is None:
-      return
-
-    table = self.tables[node.table_id]
-    col = table.get_column(node.col_id)
-    assert col.has_formula(), "Engine._recompute: called on no-formula node %s" % (node,)
-
-    # Get a sorted list of row IDs, excluding deleted rows (they will sometimes end up in
-    # recompute_map) and rows already done (since _recompute_done_map got cleared).
-    if node not in self._recompute_done_map:
-      # Before starting to evaluate a formula, call reset_rows()
-      # on all relations with nodes we depend on. E.g. this is
-      # used for lookups, so that we can reset stored lookup
-      # information for rows that are about to get reevaluated.
-      self.dep_graph.reset_dependencies(node, dirty_rows)
-      self._recompute_done_map[node] = set()
-
-    exclude = self._recompute_done_map[node]
-    if dirty_rows == depend.ALL_ROWS:
-      dirty_rows = SortedSet(r for r in table.row_ids if r not in exclude)
-      self.recompute_map[node] = dirty_rows
-
-    exempt = self._prevent_recompute_map.get(node, None)
-    if exempt:
-      # If allow_evaluation=False we're not supposed to actually compute dirty_rows.
-      # But we may need to compute them later,
-      # so ensure self.recompute_map[node] isn't mutated by separating it from dirty_rows.
-      # Therefore dirty_rows is assigned a new value. Note that -= would be a mutation.
-      dirty_rows = dirty_rows - exempt
-      if allow_evaluation:
-        self.recompute_map[node] = dirty_rows
-
-    require_rows = sorted(require_rows or [])
-
-    previous_current_node = self._current_node
-    previous_is_current_node_formula = self._is_current_node_formula
-    self._current_node = node
-    # Prevents dependency creation for non-formula nodes. A non-formula column may include a
-    # formula to eval for a newly-added record. Those shouldn't create dependencies.
-    self._is_current_node_formula = col.is_formula()
-
-    changes = None
-    cleaned = []    # this lists row_ids that can be removed from dirty_rows once we are no
-                    # longer iterating on it.
-    try:
-      require_count = len(require_rows)
-      for i, row_id in enumerate(itertools.chain(require_rows, dirty_rows)):
-        required = i < require_count or require_count == 0
-        if require_count and row_id not in dirty_rows:
-          # Nothing need be done for required rows that are already up to date.
-          continue
-        if row_id not in table.row_ids or row_id in exclude:
-          # We can declare victory for absent or excluded rows.
-          cleaned.append(row_id)
-          continue
-        if not allow_evaluation:
-          # We're not actually in a position to evaluate this cell, we need to just
-          # report that we needed an _update_loop will arrange for us to be called
-          # again in a better order.
-          if required:
-            msg = 'Cell value not available yet'
-            err = OrderError(msg, node, row_id)
-            if not self._cell_required_error:
-              # Cache the exception in case user consumes it or modifies it in their formula.
-              self._cell_required_error = OrderError(msg, node, row_id)
-            raise err
-          # For common-case formulas, all cells in a column are likely to fail in the same way,
-          # so don't bother trying more from this column until we've reordered.
-          return
-        save_value = True
-        value = None
-        try:
-          # We figure out if we've hit a cycle here.  If so, we just let _recompute_on_cell
-          # know, so it can set the cell value appropriately and do some other bookkeeping.
-          cycle = required and (node, row_id) in self._locked_cells
-          value = self._recompute_one_cell(table, col, row_id, cycle=cycle, node=node)
-        except RequestingError:
-          # The formula will be evaluated again soon when we have a response.
-          save_value = False
-        except OrderError as e:
-          if not required:
-            # We're out of order, but for a cell we were evaluating opportunistically.
-            # Don't throw an exception, since it could lead us off on a wild goose
-            # chase - let _update_loop focus on one path at a time.
-            return
-          # Keep track of why this cell was needed.
-          e.requiring_node = node
-          e.requiring_row_id = row_id
-          raise e
-
-        # Successfully evaluated a cell!  Unlock it if it was locked, so other cells can
-        # use it without triggering a cyclic dependency error.
-        self._locked_cells.discard((node, row_id))
-
-        if isinstance(value, objtypes.RaisedException):
-          is_first = node not in self._is_node_exception_reported
-          if is_first:
-            self._is_node_exception_reported.add(node)
-            log.info(value.details)
-            # strip out details after logging
-            value = objtypes.RaisedException(value.error, user_input=value.user_input)
-
-        # TODO: validation columns should be wrapped to always return True/False (catching
-        # exceptions), so that we don't need special handling here.
-        if column.is_validation_column_name(col.col_id):
-          value = (value in (True, None))
-
-        if save_value:
-          # Convert the value, and if needed, set, and include into the returned action.
-          value = col.convert(value)
-          previous = col.raw_get(row_id)
-          if not strict_equal(value, previous):
-            if not changes:
-              changes = self._changes_map.setdefault(node, [])
-            changes.append((row_id, previous, value))
-            col.set(row_id, value)
-
-        exclude.add(row_id)
-        cleaned.append(row_id)
-        self._recompute_done_counter += 1
-    finally:
-      self._current_node = previous_current_node
-      self._is_current_node_formula = previous_is_current_node_formula
-      # Usually dirty_rows refers to self.recompute_map[node], so this modifies both
-      dirty_rows -= cleaned
-
-      # However it's possible for them to be different
-      # (see above where `exempt` is nonempty and allow_evaluation=True)
-      # so here we check self.recompute_map[node] directly
-      if not self.recompute_map[node]:
-        self.recompute_map.pop(node)
 
   def _requesting(self, key, args):
     """
@@ -1087,11 +946,100 @@ class Engine(object):
       self.invalidate_column(column, row_ids, column.col_id in data_cols_to_recompute)
 
   def invalidate_column(self, col_obj, row_ids=depend.ALL_ROWS, recompute_data_col=False):
+    # Old code for reference:
     # Normally, only formula columns use include_self (to recompute themselves). However, if
     # recompute_data_col is set, default formulas will also be computed.
+    # include_self = col_obj.is_formula() or (col_obj.has_formula() and recompute_data_col)
+    # self.dep_graph.invalidate_deps(col_obj.node, row_ids, self.recompute_map,
+    #                                include_self=include_self)
+    # print("invalidate_column", col_obj, row_ids, recompute_data_col)
+
     include_self = col_obj.is_formula() or (col_obj.has_formula() and recompute_data_col)
-    self.dep_graph.invalidate_deps(col_obj.node, row_ids, self.recompute_map,
-                                   include_self=include_self)
+
+    # Add a special marker to the recompute_map to indicate that this column should be recomputed as a whole.
+    if row_ids == depend.ALL_ROWS:
+      row_ids = ['all'] # It will be replaced during _bring_all_up_to_date with all row ids
+
+    if include_self:
+      for rowId in row_ids:
+        self.add_to_recalc(col_obj.table_id, col_obj.col_id, rowId)
+
+    # Add to recalc all listeners of this column.
+    
+    for rowId in row_ids:
+      self.invalidate_deps(col_obj.table_id, col_obj.col_id, rowId)
+
+
+  def invalidate_deps(self, tableId, colId, rowId):
+    listeners = self.data.sql.execute(f'''
+        SELECT lTable, lCol, lRow FROM deps WHERE rTable = ? AND rCol = ? AND (rRow = ? or rRow = 'n')
+      ''', (tableId, colId, rowId)).fetchall()
+    for listener in listeners:
+      row = listener['lRow'] if listener['lRow'] != 'n' else rowId
+      self.add_to_recalc(listener['lTable'], listener['lCol'], row)
+
+
+  def add_to_change(self, table_id, col_id, row_id):
+    self.data.sql.execute('INSERT OR IGNORE INTO changes (tableId, colId, rowId) VALUES (?, ?, ?)',
+                          (table_id, col_id, row_id)) 
+
+
+  def add_to_recalc(self, table_id, col_id, row_id):
+    sql = self.data.sql
+    sql.execute('INSERT OR IGNORE INTO recalc (tableId, colId, rowId) VALUES (?, ?, ?)', (table_id, col_id, row_id))
+
+    # seq = sql.execute(f'''
+    #   SELECT COUNT(*) as count FROM (
+    #     SELECT DISTINCT recalc.tableId, recalc.colId, recalc.rowId FROM deps
+    #     JOIN recalc on deps.rTable = recalc.tableId AND deps.rCol = recalc.colId AND deps.rRow = recalc.rowId
+    #     WHERE deps.lTable = :tableId AND deps.lCol = :colId AND deps.lRow = :rowId
+
+    #     UNION
+
+    #     SELECT DISTINCT recalc.tableId, recalc.colId, recalc.rowId FROM deps
+    #     JOIN recalc on deps.rTable = recalc.tableId AND deps.rCol = recalc.colId AND deps.rRow = 'n'
+    #     WHERE deps.lTable = :tableId AND deps.lCol = :colId AND recalc.rowId = :rowId
+    #   )
+    # ''', {'tableId': table_id, 'colId': col_id, 'rowId': row_id}).fetchall()[0]['count']
+
+    # sql.execute('UPDATE recalc SET seq = ? WHERE tableId = ? AND colId = ? AND rowId = ?', (seq, table_id, col_id, row_id))
+    
+
+    
+
+    
+
+  def add_to_deps(self, formula_node, formula_row_id, data_node, data_row_ids, relation):
+    for row_id in data_row_ids:
+      # Ignore dependencies on meta tables.
+      if formula_node.table_id.startswith('_grist_') and not data_node.table_id.startswith('_grist_'):
+        continue
+      if not formula_node.table_id.startswith('_grist_') and data_node.table_id.startswith('_grist_'):
+        continue
+
+      # Convert to identity relationship when we touch same row
+      lRow = formula_row_id
+      rRow = row_id
+      if formula_node.table_id == data_node.table_id and formula_row_id == row_id:
+        lRow = 'n'
+        rRow = 'n'
+      
+      self.data.sql.execute(f'''INSERT OR IGNORE INTO deps (lTable, lCol, lRow, rTable, rCol, rRow) VALUES (?, ?, ?, ? ,?, ?)''',
+                        (formula_node.table_id,
+                        formula_node.col_id,
+                        lRow,
+                          data_node.table_id,
+                          data_node.col_id,
+                          rRow
+                        ))
+      
+      # Test if dependency is in recalc itself
+      if self.data.sql.execute(f'''
+         SELECT EXISTS(
+           SELECT 1 FROM recalc WHERE tableId = ? AND colId = ? AND rowId = ?
+         )''', (data_node.table_id, data_node.col_id, row_id)).fetchone()[0]:
+        self._cell_required_error = OrderError('order error', depend.Node(data_node.table_id, data_node.col_id), row_id)
+        raise self._cell_required_error
 
   def prevent_recalc(self, node, row_ids, should_prevent):
     prevented = self._prevent_recompute_map.setdefault(node, set())
@@ -1099,6 +1047,7 @@ class Engine(object):
       prevented.update(row_ids)
     else:
       prevented.difference_update(row_ids)
+
 
   def rebuild_usercode(self):
     """
@@ -1224,17 +1173,24 @@ class Engine(object):
     # the table itself, so we use invalidate_column directly.
     self.invalidate_column(col_obj)
     # Remove reference to the column from the dependency graph and the recompute_map.
-    self.dep_graph.clear_dependencies(col_obj.node)
-    self.recompute_map.pop(col_obj.node, None)
+    # self.dep_graph.clear_dependencies(col_obj.node)
+    # self.recompute_map.pop(col_obj.node, None)
+
+    # self.data.sql.execute(f)
+
     # Mark the column to be destroyed at the end of applying this docaction.
     self._gone_columns.append(col_obj)
 
+  def bring_col_up_to_date(self, col):
+    print('TODO: this is not needed any more, probably')
 
   def new_column_name(self, table):
     """
     Invalidate anything that referenced unknown columns, in case the newly-added name fixes the
     broken reference.
     """
+    print("TODO: check if this is necessary")
+    return
     self.dep_graph.invalidate_deps(table._new_columns_node, depend.ALL_ROWS, self.recompute_map,
                                    include_self=False)
 
@@ -1279,7 +1235,7 @@ class Engine(object):
     # only need a subset of data loaded, it would be better to filter calc actions, and
     # include only those the clients care about. For side-effects, we might want to recompute
     # everything, and only filter what we send.
-
+    self.data.begin()
     self.out_actions = action_obj.ActionGroup()
     self._user = User(user, self.tables) if user else None
 
@@ -1303,7 +1259,7 @@ class Engine(object):
           self.assert_schema_consistent()
 
     except Exception as e:
-      raise e
+      raise e # TODO: remove this, it's for debugging
       # Save full exception info, so that we can rethrow accurately even if undo also fails.
       exc_info = sys.exc_info()
       # If we get an exception, we should revert all changes applied so far, to keep things
@@ -1419,7 +1375,7 @@ class Engine(object):
     # We check _in_update_loop to avoid a recursive call (happens when a formula produces an
     # action, as for derived/summary tables).
     if not self._in_update_loop:
-      self._bring_mlookups_up_to_date(doc_action)
+      self._bring_all_up_to_date(False)
 
   def autocomplete(self, txt, table_id, column_id, row_id, user):
     """

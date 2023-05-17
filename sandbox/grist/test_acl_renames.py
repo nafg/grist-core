@@ -125,3 +125,8 @@ class TestACLRenames(test_engine.EngineTestCase):
       [2,     2,  '( rec.escuela !=  # ünîcødé comment\n  user.School.schoolName)', 'none', ''],
       [3,     3,          '',           'all',              ''],
     ])
+
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

@@ -1311,3 +1311,7 @@ class TestSummary2(test_engine.EngineTestCase):
                formula="SUM($group.amount)"),
       ])
     ])
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

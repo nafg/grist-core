@@ -15,12 +15,13 @@ the extra complexity.
 import csv
 import datetime
 import json
+import marshal
 import math
 
 import six
 from six import integer_types
 import objtypes
-from objtypes import AltText, is_int_short
+from objtypes import AltText, decode_object, encode_object, is_int_short
 import moment
 import logger
 from records import Record, RecordSet
@@ -185,7 +186,25 @@ class Text(BaseColumnType):
 
   @classmethod
   def sql_type(cls):
-    return "TEXT"
+    return "TEXT DEFAULT ''"
+
+  
+  @classmethod
+  def decode(cls, value):
+    if value is None:
+      return None
+    if type(value) == six.binary_type:
+      return decode_object(marshal.loads(value))
+    assert type(value) == six.text_type, "Unexpected type %r" % type(value)
+    return value
+  
+
+  @classmethod
+  def encode(cls, value):
+    if type(value) in [NoneType, str]:
+      return value
+    return marshal.dumps(encode_object(value))
+  
 
 class Blob(BaseColumnType):
   """
@@ -202,6 +221,20 @@ class Blob(BaseColumnType):
   @classmethod
   def sql_type(cls):
     return "BLOB"
+  
+  @classmethod
+  def decode(cls, value):
+    if type(value) == six.binary_type:
+      return marshal.loads(decode_object(value))
+    return value
+
+
+  @classmethod
+  def encode(cls, value):
+    if type(value) in [NoneType, str, int, float]:
+      return value
+    return marshal.dumps(encode_object(value))
+
 
 class Any(BaseColumnType):
   """
@@ -215,6 +248,20 @@ class Any(BaseColumnType):
   @classmethod
   def sql_type(cls):
     return "BLOB"
+  
+  @classmethod
+  def decode(cls, value):
+    if type(value) == six.binary_type:
+      return decode_object(marshal.loads(value))
+    return value
+
+
+  @classmethod
+  def encode(cls, value):
+    if type(value) in [NoneType, str, int, float]:
+      return value
+    return marshal.dumps(encode_object(value))
+  
 
 class Bool(BaseColumnType):
   """
@@ -244,7 +291,24 @@ class Bool(BaseColumnType):
 
   @classmethod
   def sql_type(cls):
-    return "INTEGER"
+    return "BOOLEAN DEFAULT 0"
+  
+
+  @classmethod
+  def decode(cls, value):
+    if value is None:
+      return None
+    if type(value) == six.binary_type:
+      return decode_object(marshal.loads(value))
+    assert type(value) == int
+    return value == 1
+  
+
+  @classmethod
+  def encode(cls, value):
+    if type(value) in [NoneType, bool]:
+      return int(value) if value is not None else None
+    return marshal.dumps(encode_object(value))
 
 
 class Int(BaseColumnType):
@@ -267,7 +331,23 @@ class Int(BaseColumnType):
 
   @classmethod
   def sql_type(cls):
-    return "INTEGER"
+    return "INTEGER DEFAULT 0"
+  
+  @classmethod
+  def decode(cls, value):
+    if value is None:
+      return None
+    if type(value) == six.binary_type:
+      return decode_object(marshal.loads(value))
+    assert type(value) == int
+    return value
+  
+
+  @classmethod
+  def encode(cls, value):
+    if type(value) in [NoneType, int]:
+      return value
+    return marshal.dumps(encode_object(value))
 
 
 class Numeric(BaseColumnType):
@@ -287,7 +367,23 @@ class Numeric(BaseColumnType):
 
   @classmethod
   def sql_type(cls):
-    return "REAL"
+    return "NUMERIC DEFAULT 0"
+  
+  @classmethod
+  def decode(cls, value):
+    if value is None:
+      return None
+    if type(value) == six.binary_type:
+      return decode_object(marshal.loads(value))
+    return float(value)
+  
+
+  @classmethod
+  def encode(cls, value):
+    if type(value) in [NoneType, float]:
+      return value
+    return marshal.dumps(encode_object(value))
+
 
 class Date(Numeric):
   """
@@ -312,6 +408,10 @@ class Date(Numeric):
   @classmethod
   def is_right_type(cls, value):
     return isinstance(value, _numeric_or_none)
+  
+  @classmethod
+  def sql_type(cls):
+    return "NUMERIC"
 
 
 class DateTime(Date):
@@ -341,10 +441,6 @@ class DateTime(Date):
     else:
       raise objtypes.ConversionError('DateTime')
     
-  
-  @classmethod
-  def sql_type(cls):
-    return "DATE"
 
 class Choice(Text):
   """
@@ -390,10 +486,30 @@ class ChoiceList(BaseColumnType):
         pass
     return value
 
+
+  @classmethod
+  def decode(cls, value):
+    if value is None:
+      return None
+    if type(value) == six.binary_type:
+      return decode_object(marshal.loads(value))
+    assert type(value) == str
+    return tuple(json.loads(value))
+  
+
+  @classmethod
+  def encode(cls, value):
+    if value is None:
+      return None
+    if type(value) in [tuple, list]:
+      return json.dumps(value)
+    return marshal.dumps(encode_object(value))
+  
   
   @classmethod
   def sql_type(cls):
     return "TEXT"
+  
 
 class PositionNumber(BaseColumnType):
   """
@@ -412,7 +528,23 @@ class PositionNumber(BaseColumnType):
   
   @classmethod
   def sql_type(cls):
-    return "INTEGER"
+    return "NUMERIC DEFAULT 1e999"
+  
+  @classmethod
+  def decode(cls, value):
+    if value is None:
+      return None
+    if type(value) == six.binary_type:
+      return decode_object(marshal.loads(value))
+    return float(value)
+  
+
+  @classmethod
+  def encode(cls, value):
+    if type(value) in [NoneType, float]:
+      return value
+    return marshal.dumps(encode_object(value))
+  
 
 class ManualSortPos(PositionNumber):
   pass
@@ -443,7 +575,21 @@ class Id(BaseColumnType):
   
   @classmethod
   def sql_type(cls):
-    return "INTEGER"
+    return "INTEGER DEFAULT 0"
+
+  @classmethod
+  def decode(cls, value):
+    if type(value) == six.binary_type:
+      return decode_object(marshal.loads(value))
+    # Id column is special, for nulls it returns 0.
+    return int(value) if value is not None else 0
+  
+
+  @classmethod
+  def encode(cls, value):
+    if type(value) in [int]:
+      return value
+    return marshal.dumps(encode_object(value))
 
 
 class Reference(Id):
@@ -464,7 +610,7 @@ class Reference(Id):
   
   @classmethod
   def sql_type(cls):
-    return "INTEGER"
+    return "INTEGER DEFAULT 0"
 
 
 class ReferenceList(BaseColumnType):
@@ -502,13 +648,28 @@ class ReferenceList(BaseColumnType):
   
   @classmethod
   def sql_type(cls):
-    return "TEXT"
+    return "TEXT DEFAULT NULL"
+  
+  @classmethod
+  def decode(cls, value):
+    if value is None:
+      return None
+    if type(value) == six.binary_type:
+      return decode_object(marshal.loads(value))
+    assert type(value) == str
+    return decode_object(json.loads(value))
+  
+
+  @classmethod
+  def encode(cls, value):
+    if value is None:
+      return None
+    if isinstance(value, (list, tuple)):
+      return json.dumps(encode_object(value))
+    return marshal.dumps(encode_object(value))
 
 
 class ChildReferenceList(ReferenceList):
-  """
-  Chil genuis reference list type.
-  """
   def __init__(self, table_id):
     super(ChildReferenceList, self).__init__(table_id)
 
@@ -523,3 +684,4 @@ class Attachments(ReferenceList):
 
 def is_json_array(val):
   return isinstance(val, six.string_types) and val.startswith('[')
+

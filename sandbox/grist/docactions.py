@@ -262,6 +262,9 @@ class DocActions(object):
 
     old_table = self._engine.tables[old_table_id]
 
+    self._engine.data.rename_table(old_table_id, new_table_id)
+    self._engine.data.detach_table(old_table)
+
     # Update schema, and re-generate the module code.
     old = self._engine.schema.pop(old_table_id)
     self._engine.schema[new_table_id] = schema.SchemaTable(new_table_id, old.columns)

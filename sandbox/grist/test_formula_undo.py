@@ -161,3 +161,7 @@ return '#%s %s' % (table.my_counter, $schoolName)
         ["ModifyColumn", "Students", "newCol", {"type": "Text"}],
       ]
     })
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

@@ -86,3 +86,8 @@ class TestChain(unittest.TestCase):
   def test_chain_type_error(self):
     with self.assertRaises(TypeError):
       functions.SUM(x / "2" for x in [1, 2, 3])
+
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

@@ -229,3 +229,9 @@ class TestRules(test_engine.EngineTestCase):
       ["RemoveRecord", "_grist_Tables_column", rule_id],
       ["RemoveColumn", "Inventory", "gristHelper_ConditionalRule"]
     ]})
+
+
+
+import unittest
+if __name__ == "__main__":
+  unittest.main()

@@ -608,7 +608,7 @@ class UserActions(object):
 
     for col, values in six.iteritems(col_updates):
       if 'type' in values:
-        self.doModifyColumn(col.tableId, col.colId, {'type': 'Int'})
+        self.doModifyColumn(col.tableId, col.colId, {'type': "Int"})
 
     make_acl_updates = acl.prepare_acl_table_renames(self._docmodel, self, table_renames)
 

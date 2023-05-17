@@ -127,3 +127,7 @@ class TestDefaultFormulas(test_engine.EngineTestCase):
     self.assertEqual(observed_data.columns['AddTime'][0], None)
     self.assertLessEqual(abs(observed_data.columns['AddTime'][1] - now), 2)
     self.assertLessEqual(abs(observed_data.columns['AddTime'][2] - now), 2)
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()
