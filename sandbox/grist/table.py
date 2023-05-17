@@ -184,6 +184,7 @@ class Table(object):
     # Each table maintains a reference to the engine that owns it.
     self._engine = engine
 
+    self.detached = False
     engine.data.create_table(self)
 
     # The UserTable object for this table, set in _rebuild_model
@@ -244,8 +245,14 @@ class Table(object):
     # is called seems to be too late, at least for unit tests.
     self._empty_lookup_column = self._get_lookup_map(())
 
+  def clear(self):
+    self.get_column('id').clear()
+    for column in six.itervalues(self.all_columns):
+      column.clear()
 
   def destroy(self):
+    if self.detached:
+      return
     self._engine.data.drop_table(self)
 
   def _num_rows(self):

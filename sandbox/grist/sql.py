@@ -7,87 +7,31 @@ import six
 
 import sqlite3
 
-
-def change_id_to_primary_key(conn, table_name):
-  cursor = conn.cursor()
-  cursor.execute('PRAGMA table_info("{}");'.format(table_name))
-  columns = cursor.fetchall()
-  create_table_sql = 'CREATE TABLE "{}_temp" ('.format(table_name)
-  for column in columns:
-      column_name, column_type, _, _, _, _ = column
-      primary_key = "PRIMARY KEY" if column_name == "id" else ""
-      create_table_sql += '"{}" {} {}, '.format(column_name, column_type, primary_key)
-  create_table_sql = create_table_sql.rstrip(", ") + ");"
-  cursor.execute(create_table_sql)
-  cursor.execute('INSERT INTO "{}_temp" SELECT * FROM "{}";'.format(table_name, table_name))
-  cursor.execute('DROP TABLE "{}";'.format(table_name))
-  cursor.execute('ALTER TABLE "{}_temp" RENAME TO "{}";'.format(table_name, table_name))
-  cursor.close()
-
-
-def delete_column(conn, table_name, column_name):
-  cursor = conn.cursor()
-  cursor.execute('PRAGMA table_info("{}");'.format(table_name))
-  columns_info = cursor.fetchall()
-  new_columns = ", ".join(
-      '"{}" {}'.format(col[1], col[2])
-      for col in columns_info
-      if col[1] != column_name
-  )
-  if new_columns:
-    cursor.execute('CREATE TABLE "new_{}" ({})'.format(table_name, new_columns))
-    cursor.execute('INSERT INTO "new_{}" SELECT {} FROM "{}"'.format(table_name, new_columns, table_name))
-    cursor.execute('DROP TABLE "{}"'.format(table_name))
-    cursor.execute('ALTER TABLE "new_{}" RENAME TO "{}"'.format(table_name, table_name))
-  conn.commit()
-
-
-def rename_column(conn, table_name, old_column_name, new_column_name):
-  cursor = conn.cursor()
-  cursor.execute('PRAGMA table_info("{}");'.format(table_name))
-  columns_info = cursor.fetchall()
-
-  # Construct new column definitions string
-  new_columns = []
-  for col in columns_info:
-      if col[1] == old_column_name:
-          new_columns.append('"{}" {}'.format(new_column_name, col[2]))
-      else:
-          new_columns.append('"{}" {}'.format(col[1], col[2]))
-  new_columns_str = ", ".join(new_columns)
-
-  # Create new table with renamed column
-  cursor.execute('CREATE TABLE "new_{}" ({});'.format(table_name, new_columns_str))
-  cursor.execute('INSERT INTO "new_{}" SELECT {} FROM "{}";'.format(table_name, new_columns_str, table_name))
-
-  # Drop original table and rename new table to match original table name
-  cursor.execute('DROP TABLE "{}";'.format(table_name))
-  cursor.execute('ALTER TABLE "new_{}" RENAME TO "{}";'.format(table_name, table_name))
-
-  conn.commit()
-
-
-
 def change_column_type(conn, table_name, column_name, new_type):
   cursor = conn.cursor()
-  cursor.execute('PRAGMA table_info("{}");'.format(table_name))
-  columns_info = cursor.fetchall()
-  old_type = new_type
-  for col in columns_info:
-    if col[1] == column_name:
-      old_type = col[2].upper()
-      break
-  if old_type == new_type:
-    return
-  new_columns = ", ".join(
-      '"{}" {}'.format(col[1], new_type if col[1] == column_name else col[2])
+  try:
+    cursor.execute('PRAGMA table_info("{}");'.format(table_name))
+    columns_info = cursor.fetchall()
+    old_type = new_type
+    for col in columns_info:
+      if col[1] == column_name:
+        old_type = col[2].upper()
+        break
+    if old_type == new_type:
+      return
+    new_columns_def = ", ".join(
+      '"{}" {}{}'.format(col[1], new_type if col[1] == column_name else col[2], " DEFAULT " + str(col[4]) if col[4] is not None else "")
       for col in columns_info
-  )
-  cursor.execute('CREATE TABLE "new_{}" ({});'.format(table_name, new_columns))
-  cursor.execute('INSERT INTO "new_{}" SELECT * FROM "{}";'.format(table_name, table_name))
-  cursor.execute('DROP TABLE "{}";'.format(table_name))
-  cursor.execute('ALTER TABLE "new_{}" RENAME TO "{}";'.format(table_name, table_name))
-  conn.commit()
+    )
+    
+    column_names = ", ".join(quote(col[1]) for col in columns_info)
+    cursor.execute('CREATE TABLE "new_{}" ({});'.format(table_name, new_columns_def))
+    cursor.execute('INSERT INTO "new_{}" SELECT {} FROM "{}";'.format(table_name, column_names, table_name))
+    cursor.execute('DROP TABLE "{}";'.format(table_name))
+    cursor.execute('ALTER TABLE "new_{}" RENAME TO "{}";'.format(table_name, table_name))
+  finally:
+    cursor.close()
+
 
 
 def is_primitive(value):
@@ -96,133 +40,41 @@ def is_primitive(value):
   bool_type = (bool,)
   return isinstance(value, string_types + numeric_types + bool_type)
 
-def size(sql: sqlite3.Connection, table):
-  cursor = sql.execute('SELECT MAX(id) FROM %s' % table)
-  value = (cursor.fetchone()[0] or 0)
-  return value
+def quote(name):
+  return '"{}"'.format(name)
 
-def next_row_id(sql: sqlite3.Connection, table):
-  cursor = sql.execute('SELECT MAX(id) FROM %s' % table)
-  value = (cursor.fetchone()[0] or 0) + 1
-  return value
-
-def create_table(sql, table_id):
-  sql.execute("CREATE TABLE IF NOT EXISTS {} (id INTEGER PRIMARY KEY)".format(table_id))
-
-def column_raw_get(sql, table_id, col_id, row_id):
-  value = sql.execute('SELECT "{}" FROM {} WHERE id = ?'.format(col_id, table_id), (row_id,)).fetchone()
-  return value[col_id] if value else None
-
-def column_set(sql, table_id, col_id, row_id, value):
-  if col_id == 'id':
-    raise Exception('Cannot set id')
-
-  if isinstance(value, list):
-    value = json.dumps(value)
-
-  if not is_primitive(value) and value is not None:
-    value = repr(value)
-  
+def delete_column(conn, table_name, column_name):
+  cursor = conn.cursor()
   try:
-    id = column_raw_get(sql, table_id, 'id', row_id)
-    if id is None:
-      # print("Insert [{}][{}][{}] = {}".format(table_id, col_id, row_id, value))
-      sql.execute('INSERT INTO {} (id) VALUES (?)'.format(table_id), (row_id,))
-    else:
-      # print("Update [{}][{}][{}] = {}".format(table_id, col_id, row_id, value))
-      pass
-    sql.execute('UPDATE {} SET "{}" = ? WHERE id = ?'.format(table_id, col_id), (value, row_id))
-  except sqlite3.OperationalError:
-    raise
-
-def column_grow(sql, table_id, col_id):
-  sql.execute("INSERT INTO {} DEFAULT VALUES".format(table_id, col_id))
-
-def col_exists(sql, table_id, col_id):
-  cursor = sql.execute('PRAGMA table_info({})'.format(table_id))
-  for row in cursor:
-    if row[1] == col_id:
-      return True
-  return False
-
-def column_create(sql, table_id, col_id, col_type='BLOB'):
-  if col_exists(sql, table_id, col_id):
-    change_column_type(sql, table_id, col_id, col_type)
-    return
-  try:
-    sql.execute('ALTER TABLE {} ADD COLUMN "{}" {}'.format(table_id, col_id, col_type))
-  except sqlite3.OperationalError as e:
-    if str(e).startswith('duplicate column name'):
-      return
-    raise e
-
-class Column(object):
-  def __init__(self, sql, col):
-    self.sql = sql
-    self.col = col
-    self.col_id = col.col_id
-    self.table_id = col.table_id
-    create_table(self.sql, self.col.table_id)
-    column_create(self.sql, self.col.table_id, self.col.col_id, self.col.type_obj.sql_type())
+    cursor.execute('PRAGMA table_info("{}");'.format(table_name))
+    columns_info = cursor.fetchall()
+    
+    new_columns_def = ", ".join(
+      '"{}" {}{}'.format(col[1], col[2], " DEFAULT " + str(col[4]) if col[4] is not None else "")
+      for col in columns_info
+      if col[1] != column_name
+    )
+    
+    column_names = ", ".join(quote(col[1]) for col in columns_info if col[1] != column_name)
+    
+    if new_columns_def:
+      cursor.execute('CREATE TABLE "new_{}" ({})'.format(table_name, new_columns_def))
+      cursor.execute('INSERT INTO "new_{}" SELECT {} FROM "{}"'.format(table_name, column_names, table_name))
+      cursor.execute('DROP TABLE "{}"'.format(table_name))
+      cursor.execute('ALTER TABLE "new_{}" RENAME TO "{}"'.format(table_name, table_name))
+  finally:
+    cursor.close()
 
 
-  def __iter__(self):
-    for i in range(0, len(self)):
-      if i == 0:
-        yield None
-      yield self[i]
 
-  def __len__(self):
-    len = size(self.sql, self.col.table_id)
-    return len + 1
-  
-  def __setitem__(self, row_id, value):
-    if self.col.col_id == 'id':
-      if value == 0:
-        # print('Deleting by setting id to 0')
-        self.__delitem__(row_id)
-      return
-    column_set(self.sql, self.col.table_id, self.col.col_id, row_id, value)
 
-  def __getitem__(self, key):
-    if self.col.col_id == 'id' and key == 0:
-      return key
-    value = column_raw_get(self.sql, self.col.table_id, self.col.col_id, key)
-    return value
-  
-  def __delitem__(self, row_id):
-    # print("Delete [{}][{}]".format(self.col.table_id, row_id))
-    self.sql.execute('DELETE FROM {} WHERE id = ?'.format(self.col.table_id), (row_id,))
 
-  def remove(self):
-    delete_column(self.sql, self.col.table_id, self.col.col_id)
+def is_primitive(value):
+  string_types = six.string_types if six.PY3 else (str,)
+  numeric_types = six.integer_types + (float,)
+  bool_type = (bool,)
+  return isinstance(value, string_types + numeric_types + bool_type)
 
-  def rename(self, new_name):
-    rename_column(self.sql, self.table_id, self.col_id, new_name)
-    self.col_id = new_name
-
-  def copy_from(self, other):
-    if self.col_id == other.col_id and self.table_id == other.table_id:
-      return
-    try:
-      if self.table_id == other.table_id:
-        query = ('''
-          UPDATE "{}" SET "{}" = "{}"
-        '''.format(self.table_id, self.col_id, other.col_id))
-        self.sql.execute(query)
-        return
-      query = ('''
-        INSERT INTO "{}" (id, "{}") SELECT id, "{}" FROM "{}" WHERE true
-        ON CONFLICT(id) DO UPDATE SET "{}" = excluded."{}"
-      '''.format(self.table_id, self.col_id, other.col_id, other.table_id, self.col_id, other.col_id))
-      self.sql.execute(query)
-    except sqlite3.OperationalError as e:
-      if str(e).startswith('no such table'):
-        return
-      raise e
-
-def column(sql, col):
-  return Column(sql, col)
 
 def create_schema(sql):
   sql.executescript('''
@@ -290,9 +142,9 @@ def create_schema(sql):
 def open_connection(file):
   sql = sqlite3.connect(file, isolation_level=None)
   sql.row_factory = sqlite3.Row
-  # sql.execute('PRAGMA encoding="UTF-8"')
+  sql.execute('PRAGMA encoding="UTF-8"')
   # # sql.execute('PRAGMA journal_mode = DELETE;')
-  # # sql.execute('PRAGMA journal_mode = WAL;')
+  # sql.execute('PRAGMA journal_mode = WAL;')
   # sql.execute('PRAGMA synchronous = OFF;')
   # sql.execute('PRAGMA trusted_schema = OFF;')
   return sql

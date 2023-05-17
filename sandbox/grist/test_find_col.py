@@ -45,3 +45,7 @@ class TestFindCol(test_engine.EngineTestCase):
 
     # Test that it's safe to include a non-hashable value in the request.
     self.assertEqual(self.engine.find_col_from_values(("columbia", "yale", ["Eureka"]), 0), [23])
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

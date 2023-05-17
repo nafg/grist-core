@@ -284,7 +284,8 @@ class RaisedException(object):
     if self._encoded_error is not None:
       return self._encoded_error
     if self.has_user_input():
-      user_input = {"u": encode_object(self.user_input)}
+      u = encode_object(self.user_input)
+      user_input = {"u": u}
     else:
       user_input = None
     result = [self._name, self._message, self.details, user_input]
@@ -304,6 +305,8 @@ class RaisedException(object):
     while isinstance(error, CellError):
       if not location:
         location = "\n(in referenced cell {error.location})".format(error=error)
+      if error.error is None:
+        break
       error = error.error
     self._name = type(error).__name__
     if include_details:
@@ -342,6 +345,12 @@ class RaisedException(object):
     exc.details = safe_shift(args)
     exc.user_input = safe_shift(args, {})
     exc.user_input = decode_object(exc.user_input.get("u", RaisedException.NO_INPUT))
+
+    if exc._name == "CircularRefError":
+      exc.error = depend.CircularRefError(exc._message)
+    if exc._name == "AttributeError":
+      exc.error = AttributeError(exc._message)
+
     return exc
 
 class CellError(Exception):

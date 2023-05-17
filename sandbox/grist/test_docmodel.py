@@ -252,3 +252,8 @@ class TestDocModel(test_engine.EngineTestCase):
     self.assertEqual(list(map(int, student_columns)), [1,2,4,5,6,25,22,23])
     school_columns = self.engine.docmodel.tables.lookupOne(tableId='Schools').columns
     self.assertEqual(list(map(int, school_columns)), [24,10,12])
+
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

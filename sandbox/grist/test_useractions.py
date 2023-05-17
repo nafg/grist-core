@@ -1652,3 +1652,7 @@ class TestUserActions(test_engine.EngineTestCase):
     self.apply_user_action(['DuplicateTable', 'Table1', 'Foo', True])
     self.assertTableData('Table1', data=[["id", "State2", 'manualSort'], [1, 'NY', 1.0]])
     self.assertTableData('Foo', data=[["id", "State2", 'manualSort'], [1, 'NY', 1.0]])
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

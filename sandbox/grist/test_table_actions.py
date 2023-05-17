@@ -1,4 +1,3 @@
-import unittest
 import logger
 
 import testutil
@@ -309,5 +308,6 @@ class TestTableActions(test_engine.EngineTestCase):
     ])
 
 
+import unittest
 if __name__ == "__main__":
   unittest.main()

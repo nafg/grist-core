@@ -239,3 +239,7 @@ return x or y
 
     # Check that missing arguments is OK
     self.assertEqual(make_body("ISERR()"), "return ISERR()")
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

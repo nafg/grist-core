@@ -428,3 +428,7 @@ class TestRenames(test_engine.EngineTestCase):
       [13,    "New Haven",  people_rec(2),      "Alice"],
       [14,    "West Haven", people_rec(0),      ""],
     ])
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

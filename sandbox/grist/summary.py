@@ -4,6 +4,7 @@ import json
 import six
 
 from column import is_visible_column
+from objtypes import encode_object, equal_encoding
 import sort_specs
 
 import logger
@@ -194,7 +195,7 @@ class SummaryActions(object):
       )
       for c in source_groupby_columns
     ]
-    summary_table = next((t for t in source_table.summaryTables if t.summaryKey == key), None)
+    summary_table = next((t for t in source_table.summaryTables if equal_encoding(t.summaryKey, key)), None)
     created = False
     if not summary_table:
       groupby_col_ids = [c.colId for c in groupby_colinfo]
@@ -219,7 +220,9 @@ class SummaryActions(object):
                            visibleCol=[c.visibleCol for c in source_groupby_columns])
       for col in groupby_columns:
         self.useractions.maybe_copy_display_formula(col.summarySourceCol, col)
-      assert summary_table.summaryKey == key
+      if not (summary_table.summaryKey == key):
+        if not (encode_object(summary_table.summaryKey) == encode_object(key)):
+          assert False
 
     return (summary_table, groupby_columns, formula_columns)
 

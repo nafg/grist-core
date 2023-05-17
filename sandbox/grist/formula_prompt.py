@@ -4,7 +4,7 @@ import textwrap
 import six
 
 from column import is_visible_column, BaseReferenceColumn
-from objtypes import RaisedException
+from objtypes import RaisedException, RecordStub
 import records
 
 
@@ -64,6 +64,8 @@ def values_type(values):
     type_name = val._table.table_id
   elif isinstance(val, records.RecordSet):
     type_name = "List[{}]".format(val._table.table_id)
+  elif isinstance(val, RecordStub):
+    type_name = val.table_id
   elif isinstance(val, list):
     type_name = "List[{}]".format(values_type(val))
   elif isinstance(val, set):

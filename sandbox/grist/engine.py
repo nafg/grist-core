@@ -15,7 +15,7 @@ import six
 from six.moves import zip
 from six.moves.collections_abc import Hashable  # pylint:disable-all
 from sortedcontainers import SortedSet
-from data import MemoryColumn, MemoryDatabase, SqlDatabase
+from data import MemoryColumn, MemoryDatabase, SqlDatabase, make_data
 import acl
 import actions
 import action_obj
@@ -315,7 +315,12 @@ class Engine(object):
     Returns the list of all the other table names that data engine expects to be loaded.
     """
 
-    self.data = SqlDatabase(self)
+    if self.data:
+      self.tables = {}
+      self.data.close()
+      self.data = None
+
+    self.data = make_data(self)
 
     self.schema = schema.build_schema(meta_tables, meta_columns)
 
@@ -337,8 +342,7 @@ class Engine(object):
     table = self.tables[data.table_id]
 
     # Clear all columns, whether or not they are present in the data.
-    for column in six.itervalues(table.all_columns):
-      column.clear()
+    table.clear()
 
     # Only load columns that aren't stored.
     columns = {col_id: data for (col_id, data) in six.iteritems(data.columns)
@@ -1279,7 +1283,7 @@ class Engine(object):
     # only need a subset of data loaded, it would be better to filter calc actions, and
     # include only those the clients care about. For side-effects, we might want to recompute
     # everything, and only filter what we send.
-
+    self.data.begin()
     self.out_actions = action_obj.ActionGroup()
     self._user = User(user, self.tables) if user else None
 
@@ -1303,7 +1307,6 @@ class Engine(object):
           self.assert_schema_consistent()
 
     except Exception as e:
-      raise e
       # Save full exception info, so that we can rethrow accurately even if undo also fails.
       exc_info = sys.exc_info()
       # If we get an exception, we should revert all changes applied so far, to keep things

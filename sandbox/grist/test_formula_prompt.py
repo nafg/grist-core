@@ -223,3 +223,7 @@ class Table3:
         description here
         """
 ''')
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

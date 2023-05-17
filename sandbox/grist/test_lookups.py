@@ -831,3 +831,7 @@ return ",".join(str(r.id) for r in Students.lookupRecords(firstName=fn, lastName
         [1,    123,   [1],       [2]],
         [2,    'foo', [1],       [2]],
       ])
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

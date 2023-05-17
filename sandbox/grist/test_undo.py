@@ -122,3 +122,7 @@ class TestUndo(test_engine.EngineTestCase):
       ["id", "amount", "amount2"],
       [22, 2, 2],
     ])
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

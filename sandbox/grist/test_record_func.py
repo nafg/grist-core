@@ -191,3 +191,7 @@ class TestRecordFunc(test_engine.EngineTestCase):
       [4,     {'city': 'West Haven', 'Bar': None, 'id': 14,
               '_error_': {'Bar': 'ZeroDivisionError: integer division or modulo by zero'}}],
     ])
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

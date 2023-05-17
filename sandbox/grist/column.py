@@ -117,7 +117,6 @@ class BaseColumn(object):
     Called when the column is deleted.
     """
     if self.detached:
-      print('Warning - destroying already detached column: ', self.table_id, self.col_id)
       return
 
     self.engine.data.drop_column(self)
@@ -138,6 +137,8 @@ class BaseColumn(object):
     """
     if self.detached:
       raise Exception('Column already detached: ', self.table_id, self.col_id)
+    if (self.col_id == "R"):
+      print('Column {}.{} is setting row {} to {}'.format(self.table_id, self.col_id, row_id, value))
     self._data.set(row_id, value)
 
 
@@ -171,6 +172,15 @@ class BaseColumn(object):
         raise raw.error
       else:
         raise objtypes.CellError(self.table_id, self.col_id, row_id, raw.error)
+    elif isinstance(raw, objtypes.RecordSetStub):
+      # rec_list = [self.engine.tables[raw.table_id].get_record(r) for r in raw.row_ids]
+      rel = relation.ReferenceRelation(self.table_id, raw.table_id , self.col_id)
+      (rel.add_reference(row_id, r) for r in raw.row_ids)
+      raw = self.engine.tables[raw.table_id].RecordSet(raw.row_ids, rel)
+    elif isinstance(raw, objtypes.RecordStub):
+      rel = relation.ReferenceRelation(self.table_id, raw.table_id , self.col_id)
+      rel.add_reference(row_id, raw.row_id)
+      raw = self.engine.tables[raw.table_id].Record(raw.row_id, rel)
 
     # Inline _convert_raw_value here because this is particularly hot code, called on every access
     # of any data field in a formula.
@@ -229,10 +239,10 @@ class BaseColumn(object):
     if self.detached:
       raise Exception('Column already detached: ', self.table_id, self.col_id)
     if other_column.detached:
-      print('Warning: copying from detached column: ', other_column.table_id, other_column.col_id)
+      # print('Warning: copying from detached column: ', other_column.table_id, other_column.col_id)
       return
     
-    print('Column {}.{} is copying from {}.{}'.format(self.table_id, self.col_id, other_column.table_id, other_column.col_id))
+    # print('Column {}.{} is copying from {}.{}'.format(self.table_id, self.col_id, other_column.table_id, other_column.col_id))
 
     self._data.copy_from(other_column._data)
 

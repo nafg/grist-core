@@ -203,3 +203,7 @@ class TestACLFormulaUserActions(test_engine.EngineTestCase):
         "aclFormulaParsed": ['["Not", ["Attr", ["Name", "user"], "IsGood"]]', ''],
       }],
     ]})
+
+if __name__ == "__main__":
+  import unittest
+  unittest.main()

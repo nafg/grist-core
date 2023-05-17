@@ -1,19 +1,5 @@
-import difflib
-import functools
-import json
-import unittest
-from collections import namedtuple
-from pprint import pprint
-
-import six
-
-import actions
-import column
 import engine
-import logger
 import useractions
-import testutil
-import objtypes
 
 
 eng = engine.Engine()
@@ -29,21 +15,46 @@ def apply(actions):
   
 
 try:
-  apply(['AddRawTable', 'Table1'])
-  apply(['AddRecord', 'Table1', None, {'A': 1, 'B': 2, 'C': 3}])
-  apply(['AddColumn', 'Table1', 'D', {'type': 'Numeric', 'isFormula': True, 'formula': '$A + 3'}]),
-  apply(['RenameColumn', 'Table1', 'A', 'NewA'])
-  apply(['RenameTable', 'Table1', 'Dwa'])
-  apply(['RemoveColumn', 'Dwa', 'B'])
-  apply(['RemoveTable', 'Dwa'])
+  # Ref column
+  def ref_columns():
+    apply(['AddRawTable', 'Table1'])
+    apply(['AddRawTable', 'Table2'])
+    apply(['AddRecord', 'Table1', None, {"A": 30}])
+    apply(['AddColumn', 'Table2', 'R', {'type': 'Ref:Table1'}]),
+    apply(['AddColumn', 'Table2', 'F', {'type': 'Any', "isFormula": True, "formula": "$R.A"}]),
+    apply(['AddRecord', 'Table2', None, {'R': 1}])
+    apply(['UpdateRecord', 'Table1', 1, {'A': 40}])
+    print(eng.fetch_table('Table2'))
 
-  #  ['RemoveColumn', "Table1", 'A'],
-    # ['AddColumn', 'Table1', 'D', {'type': 'Numeric', 'isFormula': True, 'formula': '$A + 3'}],
-    # ['ModifyColumn', 'Table1', 'B', {'type': 'Numeric', 'isFormula': True, 'formula': '$A + 1'}],
-  #])
 
-    # ['AddColumn', 'Table1', 'D', {'type': 'Numeric', 'isFormula': True, 'formula': '$A + 3'}],
-    # ['ModifyColumn', 'Table1', 'B', {'type': 'Numeric', 'isFormula': True, 'formula': '$A + 1'}],
+  # Any lookups
+  def any_columns():
+    apply(['AddRawTable', 'Table1'])
+    apply(['AddRawTable', 'Table2'])
+    apply(['AddRecord', 'Table1', None, {"A": 30}])
+    apply(['AddColumn', 'Table2', 'R', {'type': 'Any', 'isFormula': True, 'formula': 'Table1.lookupOne(id=1)'}]),
+    apply(['AddColumn', 'Table2', 'F', {'type': 'Any', "isFormula": True, "formula": "$R.A"}]),
+    apply(['AddRecord', 'Table2', None, {}])
+    print(eng.fetch_table('Table2'))
+    # Change A to 40
+    apply(['UpdateRecord', 'Table1', 1, {'A': 40}])
+    print(eng.fetch_table('Table2'))
+
+  # Any lookups
+  def simple_formula():
+    apply(['AddRawTable', 'Table1'])
+    apply(['ModifyColumn', 'Table1', 'B', {'type': 'Numeric', 'isFormula': True, 'formula': 'Table1.lookupOne(id=$id).A + 10'}]),
+    apply(['AddRecord', 'Table1', None, {"A": 1}])
+    print(eng.fetch_table('Table1'))
+
+    apply(['UpdateRecord', 'Table1', 1, {"A": 2}])
+    print(eng.fetch_table('Table1'))
+
+    apply(['UpdateRecord', 'Table1', 1, {"A": 3}])
+    print(eng.fetch_table('Table1'))
+
+  simple_formula()
+
 finally:
   # Test if method close is in engine
   if hasattr(eng, 'close'):
